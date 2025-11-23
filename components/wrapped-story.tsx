@@ -58,7 +58,7 @@ export const WrappedStory: React.FC<WrappedStoryProps> = ({ onClose, memories, g
         };
     }, [memories, globalMemories]);
 
-    const shareText = `My Network School Wrapped: I'm a ${stats.vibe}! Captured ${stats.totalMemories} moments. #NetworkSchool #ForestCity`;
+    const shareText = `My Network School Wrapped: I'm a ${stats.vibe}! Captured ${stats.totalUserMemories} moments. #NetworkSchool #ForestCity`;
     const shareUrl = typeof window !== 'undefined' ? window.location.href : '';
 
     const handleShareTwitter = (e: React.MouseEvent) => {
