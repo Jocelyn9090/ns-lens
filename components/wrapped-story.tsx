@@ -8,8 +8,8 @@ interface Memory {
     text: string;
     category: string;
     location: string;
-    timestamp: any;
-    userId: string;
+    created_at: string;
+    user_id: string;
 }
 
 interface WrappedStoryProps {
