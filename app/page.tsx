@@ -207,7 +207,13 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-neutral-950 text-gray-100 font-sans selection:bg-green-500/30">
       <AuthModal isOpen={showAuthModal} onClose={() => setShowAuthModal(false)} />
-      {showWrapped && <WrappedStory onClose={() => setShowWrapped(false)} memories={memories} userName={user?.id?.slice(0, 6)} />}
+      {showWrapped && (
+        <WrappedStory
+          onClose={() => setShowWrapped(false)}
+          memories={memories.filter(m => m.user_id === user?.id)}
+          userName={profile?.display_name || user?.email?.split('@')[0]}
+        />
+      )}
 
       <div className="max-w-xl mx-auto min-h-screen flex flex-col border-x border-white/5 shadow-2xl shadow-black">
 

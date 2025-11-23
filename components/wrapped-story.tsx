@@ -10,6 +10,7 @@ interface Memory {
     location: string;
     created_at: string;
     user_id: string;
+    image_url?: string;
 }
 
 interface WrappedStoryProps {
@@ -57,6 +58,43 @@ export const WrappedStory: React.FC<WrappedStoryProps> = ({ onClose, memories, u
                 </div>
             )
         },
+        // MEMORY SLIDES
+        ...memories.slice(0, 5).map((memory) => ({
+            color: "bg-black",
+            content: (
+                <div className="relative h-full flex flex-col">
+                    {memory.image_url ? (
+                        <div className="absolute inset-0">
+                            <img src={memory.image_url} alt="Memory" className="w-full h-full object-cover opacity-60" />
+                            <div className="absolute inset-0 bg-gradient-to-t from-black via-black/50 to-transparent" />
+                        </div>
+                    ) : (
+                        <div className={`absolute inset-0 opacity-20 ${memory.category === 'Learn' ? 'bg-blue-500' :
+                            memory.category === 'Burn' ? 'bg-orange-500' :
+                                memory.category === 'Earn' ? 'bg-green-500' : 'bg-pink-500'
+                            }`} />
+                    )}
+
+                    <div className="relative z-10 flex-1 flex flex-col justify-center p-8 text-center">
+                        <div className="mb-6 flex justify-center">
+                            <span className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider border ${memory.category === 'Learn' ? 'border-blue-400 text-blue-400' :
+                                memory.category === 'Burn' ? 'border-orange-400 text-orange-400' :
+                                    memory.category === 'Earn' ? 'border-green-400 text-green-400' : 'border-pink-400 text-pink-400'
+                                }`}>
+                                {memory.category}
+                            </span>
+                        </div>
+                        <h3 className="text-2xl md:text-3xl font-bold text-white leading-relaxed mb-4">
+                            "{memory.text}"
+                        </h3>
+                        <div className="flex items-center justify-center space-x-2 text-gray-400 text-sm mt-4">
+                            <MapPin size={14} />
+                            <span>{memory.location}</span>
+                        </div>
+                    </div>
+                </div>
+            )
+        })),
         // VIBE CHECK
         {
             color: "bg-indigo-900",
