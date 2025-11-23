@@ -5,6 +5,7 @@ import { Play, BookOpen, Zap, DollarSign, Smile, Camera, X } from 'lucide-react'
 import { supabase } from '@/lib/supabase';
 import { WrappedStory } from '@/components/wrapped-story';
 import { AuthModal } from '@/components/auth-modal';
+import { ProfileModal } from '@/components/profile-modal';
 import { MemoryFeed } from '@/components/memory-feed';
 
 interface Memory {
@@ -33,21 +34,25 @@ export default function Home() {
   const [memories, setMemories] = useState<Memory[]>([]);
   const [newMemory, setNewMemory] = useState('');
   const [category, setCategory] = useState('Learn');
-  const [location, setLocation] = useState('Cafe');
+  const [location, setLocation] = useState('NS Cafe');
+  const [eventDate, setEventDate] = useState(new Date().toISOString().split('T')[0]);
+  const [customLocation, setCustomLocation] = useState('');
+  const [showCustomLocation, setShowCustomLocation] = useState(false);
   const [showWrapped, setShowWrapped] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
+  const [showProfileModal, setShowProfileModal] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [selectedImage, setSelectedImage] = useState<File | null>(null);
-  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [mediaFiles, setMediaFiles] = useState<File[]>([]);
+  const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Auth Init
-  useEffect(() => {
-    const fetchProfile = async (userId: string) => {
-      const { data } = await supabase.from('profiles').select('*').eq('id', userId).single();
-      if (data) setProfile(data);
-    };
+  const fetchProfile = async (userId: string) => {
+    const { data } = await supabase.from('profiles').select('*').eq('id', userId).single();
+    if (data) setProfile(data);
+  };
 
+  useEffect(() => {
     const initAuth = async () => {
       const { data: { session } } = await supabase.auth.getSession();
       if (session?.user) {
@@ -116,29 +121,83 @@ export default function Home() {
     };
   }, []);
 
-  const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      setSelectedImage(file);
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setImagePreview(reader.result as string);
-      };
-      reader.readAsDataURL(file);
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files) {
+      const files = Array.from(e.target.files);
+      const processedFiles: File[] = [];
+
+      for (const file of files) {
+        // Check for HEIC by type or extension (case-insensitive)
+        const isHeic = file.type === 'image/heic' ||
+          file.type === 'image/heif' ||
+          /\.heic$/i.test(file.name);
+
+        if (isHeic) {
+          try {
+            console.log(`Processing HEIC file: ${file.name}`);
+
+            // Dynamic import
+            // @ts-ignore
+            const heic2anyModule = await import('heic2any');
+            const heic2any = heic2anyModule.default || heic2anyModule;
+
+            console.log(`heic2any loaded, type: ${typeof heic2any}`);
+
+            // Explicitly create a Blob to ensure compatibility
+            const blob = new Blob([file], { type: file.type });
+
+            const convertedBlob = await heic2any({
+              blob: blob,
+              toType: 'image/jpeg',
+              quality: 0.8
+            });
+
+            console.log('HEIC conversion successful');
+
+            const convertedFile = new File(
+              [Array.isArray(convertedBlob) ? convertedBlob[0] : convertedBlob],
+              file.name.replace(/\.(heic|HEIC)$/i, '.jpg'),
+              { type: 'image/jpeg' }
+            );
+            processedFiles.push(convertedFile);
+          } catch (err: any) {
+            console.error("HEIC Conversion Failed");
+            console.error("Error type:", typeof err);
+            try {
+              console.error("Error string:", err.toString());
+              console.error("Error keys:", Object.keys(err));
+              console.error("Error JSON:", JSON.stringify(err));
+            } catch (e) {
+              console.error("Could not inspect error object");
+            }
+
+            if (err instanceof Error) {
+              console.error("Error message:", err.message);
+              console.error("Error stack:", err.stack);
+            }
+
+            // Fallback: still upload the original HEIC file
+            processedFiles.push(file);
+          }
+        } else {
+          processedFiles.push(file);
+        }
+      }
+
+      setMediaFiles(prev => [...prev, ...processedFiles]);
     }
   };
 
-  const handleRemoveImage = () => {
-    setSelectedImage(null);
-    setImagePreview(null);
+  const handleRemoveMedia = (indexToRemove: number) => {
+    setMediaFiles(prev => prev.filter((_, index) => index !== indexToRemove));
     if (fileInputRef.current) {
-      fileInputRef.current.value = '';
+      fileInputRef.current.value = ''; // Clear the input value to allow re-selecting the same file
     }
   };
 
   const handleAddMemory = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newMemory.trim()) return;
+    if (!newMemory.trim() && mediaFiles.length === 0) return;
 
     if (!user) {
       setShowAuthModal(true);
@@ -146,48 +205,99 @@ export default function Home() {
     }
 
     try {
-      let imageUrl = null;
+      setUploading(true);
+      const uploadedMedia: { url: string, type: 'image' | 'video' }[] = [];
 
-      if (selectedImage) {
-        const fileExt = selectedImage.name.split('.').pop();
-        const fileName = `${user.id}/${Math.random()}.${fileExt}`;
+      // Upload all files
+      for (const file of mediaFiles) {
+        const fileExt = file.name.split('.').pop();
+        const fileName = `${Math.random()}.${fileExt}`;
+        const filePath = `${user.id}/${fileName}`;
 
         const { error: uploadError } = await supabase.storage
           .from('memories')
-          .upload(fileName, selectedImage);
+          .upload(filePath, file);
 
-        if (uploadError) {
-          console.error('Error uploading image:', uploadError);
-          alert('Failed to upload image');
-          return;
-        }
+        if (uploadError) throw uploadError;
 
         const { data: { publicUrl } } = supabase.storage
           .from('memories')
-          .getPublicUrl(fileName);
+          .getPublicUrl(filePath);
 
-        imageUrl = publicUrl;
+        uploadedMedia.push({
+          url: publicUrl,
+          type: file.type.startsWith('video/') ? 'video' : 'image'
+        });
       }
 
       const { data, error } = await supabase.from('memories').insert({
         text: newMemory,
         category,
-        location,
+        location: location === 'Other...' ? customLocation : location,
         user_id: user.id,
-        image_url: imageUrl
+        media_urls: uploadedMedia.map(m => m.url),
+        media_types: uploadedMedia.map(m => m.type),
+        created_at: new Date(eventDate).toISOString()
       }).select('*, profiles(display_name, email)').single();
 
       if (error) {
         console.error("Error adding memory:", error);
-        alert("Failed to add memory. Please try again.");
-      } else if (data) {
-        setMemories(prev => [data as Memory, ...prev]);
+        alert("Failed to post memory. Please try again.");
+      } else {
+        setMemories([data as Memory, ...memories]);
+        setNewMemory('');
+        setMediaFiles([]);
+        setCustomLocation('');
+        if (location === 'Other...') setLocation('NS Cafe');
       }
+    } catch (error: any) {
+      console.error("Error uploading media:", error.message);
+      alert("Failed to upload media. Please try again.");
+    } finally {
+      setUploading(false);
+    }
+  };
 
-      setNewMemory('');
-      handleRemoveImage();
+  const handleDeleteMemory = async (memoryId: string) => {
+    try {
+      const { error } = await supabase
+        .from('memories')
+        .delete()
+        .eq('id', memoryId);
+
+      if (error) {
+        console.error("Error deleting memory:", error);
+        alert("Failed to delete memory. Please try again.");
+      } else {
+        // Remove from local state
+        setMemories(prev => prev.filter(m => m.id !== memoryId));
+      }
     } catch (err) {
-      console.error("Error adding memory:", err);
+      console.error("Error deleting memory:", err);
+    }
+  };
+
+  const handleUpdateMemory = async (memoryId: string, updates: { date?: string; location?: string }) => {
+    try {
+      const updateData: any = {};
+      if (updates.date) updateData.created_at = new Date(updates.date).toISOString();
+      if (updates.location) updateData.location = updates.location;
+
+      const { error } = await supabase
+        .from('memories')
+        .update(updateData)
+        .eq('id', memoryId);
+
+      if (error) {
+        console.error("Error updating memory:", error);
+        alert("Failed to update memory.");
+      } else {
+        setMemories(prev => prev.map(m =>
+          m.id === memoryId ? { ...m, ...updateData } : m
+        ));
+      }
+    } catch (err) {
+      console.error("Error updating memory:", err);
     }
   };
 
@@ -198,38 +308,49 @@ export default function Home() {
     { id: 'Fun', icon: <Smile size={16} />, color: 'bg-pink-500' }
   ];
 
-  const locations = ["The Cafe", "Co-working", "Gym", "Poolside", "Beach", "Dorms"];
+  const locations = ["NS Cafe", "NS Library", "Co-working", "Gym", "Poolside", "Beach", "Dorms", "Other..."];
 
   if (loading) {
-    return <div className="min-h-screen bg-black flex items-center justify-center text-green-500 font-mono animate-pulse">Connecting to Network...</div>;
+    return <div className="min-h-screen bg-gray-100 flex items-center justify-center text-green-600 font-mono animate-pulse">Connecting to Network...</div>;
   }
 
   return (
-    <div className="min-h-screen bg-neutral-950 text-gray-100 font-sans selection:bg-green-500/30">
+    <div className="min-h-screen bg-gray-100 text-gray-900 font-sans selection:bg-green-500/30">
       <AuthModal isOpen={showAuthModal} onClose={() => setShowAuthModal(false)} />
+      <ProfileModal
+        isOpen={showProfileModal}
+        onClose={() => setShowProfileModal(false)}
+        profile={profile}
+        userId={user?.id}
+        onUpdate={() => user && fetchProfile(user.id)}
+      />
       {showWrapped && (
         <WrappedStory
           onClose={() => setShowWrapped(false)}
           memories={memories.filter(m => m.user_id === user?.id)}
+          globalMemories={memories}
           userName={profile?.display_name || user?.email?.split('@')[0]}
         />
       )}
 
-      <div className="max-w-xl mx-auto min-h-screen flex flex-col border-x border-white/5 shadow-2xl shadow-black">
+      <div className="max-w-xl mx-auto min-h-screen flex flex-col border-x border-gray-200 shadow-xl shadow-gray-200/50 bg-white">
 
         {/* Header */}
-        <header className="sticky top-0 z-10 bg-neutral-950/80 backdrop-blur-lg border-b border-white/10 p-4">
+        <header className="sticky top-0 z-10 bg-white/80 backdrop-blur-lg border-b border-gray-200 p-4">
           <div className="flex justify-between items-center">
             <div>
-              <h1 className="font-bold text-xl text-transparent bg-clip-text bg-gradient-to-r from-green-400 to-emerald-600 tracking-tight">
-                Network School <span className="font-light text-white">Lens</span>
+              <h1 className="font-bold text-xl tracking-tight">
+                <span className="text-gray-900">NS</span> <span className="font-light text-transparent bg-clip-text bg-gradient-to-r from-green-500 to-emerald-700">Rewind</span>
               </h1>
-              <p className="text-xs text-gray-500 font-mono">Network School • Johor</p>
+              <p className="text-xs text-gray-500 font-mono">Network School • Malaysia</p>
             </div>
 
             <div className="flex items-center space-x-3">
               {user ? (
-                <div className="flex items-center space-x-2 bg-white/5 px-3 py-1.5 rounded-full border border-white/10">
+                <button
+                  onClick={() => setShowProfileModal(true)}
+                  className="flex items-center space-x-2 bg-gray-100 px-3 py-1.5 rounded-full border border-gray-200 hover:bg-gray-200 transition-colors"
+                >
                   <div className="w-6 h-6 rounded-full bg-gradient-to-tr from-green-400 to-blue-500 flex items-center justify-center text-[10px] font-bold text-white overflow-hidden">
                     {profile?.avatar_url ? (
                       <img src={profile.avatar_url} alt="Avatar" className="w-full h-full object-cover" />
@@ -237,14 +358,14 @@ export default function Home() {
                       (profile?.display_name?.[0] || user.email?.[0] || 'U').toUpperCase()
                     )}
                   </div>
-                  <span className="text-xs font-medium text-gray-300 hidden sm:block">
+                  <span className="text-xs font-medium text-gray-700 hidden sm:block">
                     {profile?.display_name || user.email}
                   </span>
-                </div>
+                </button>
               ) : (
                 <button
                   onClick={() => setShowAuthModal(true)}
-                  className="text-xs font-bold text-green-400 hover:text-green-300 transition-colors mr-2"
+                  className="text-xs font-bold text-green-600 hover:text-green-700 transition-colors mr-2"
                 >
                   Sign In
                 </button>
@@ -252,7 +373,7 @@ export default function Home() {
 
               <button
                 onClick={() => setShowWrapped(true)}
-                className="bg-gradient-to-r from-green-600 to-teal-600 hover:from-green-500 hover:to-teal-500 text-white px-4 py-2 rounded-full text-sm font-bold flex items-center space-x-2 shadow-lg shadow-green-900/20 transition-all transform hover:scale-105 cursor-pointer"
+                className="bg-gradient-to-r from-green-600 to-teal-600 hover:from-green-500 hover:to-teal-500 text-white px-4 py-2 rounded-full text-sm font-bold flex items-center space-x-2 shadow-lg shadow-green-900/10 transition-all transform hover:scale-105 cursor-pointer"
               >
                 <Play size={14} fill="currentColor" />
                 <span className="hidden sm:inline">My Lens</span>
@@ -263,47 +384,66 @@ export default function Home() {
         </header>
 
         {/* Input Section */}
-        <div className="p-4 border-b border-white/5 bg-neutral-900/30">
+        <div className="p-4 border-b border-gray-200 bg-gray-50/50">
           <form onSubmit={handleAddMemory} className="space-y-4">
             <textarea
               value={newMemory}
               onChange={(e) => setNewMemory(e.target.value)}
               placeholder="Log a moment (e.g., 'Hit a PR at the Burn session' or 'Met a co-founder')..."
-              className="w-full bg-black/40 border border-white/10 rounded-xl p-4 text-sm focus:outline-none focus:border-green-500/50 focus:ring-1 focus:ring-green-500/50 transition-all resize-none h-24 placeholder-gray-600"
+              className="w-full bg-white border border-gray-200 rounded-xl p-4 text-sm text-gray-900 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all resize-none h-24 placeholder-gray-400 shadow-sm"
             />
 
-            {imagePreview && (
-              <div className="relative inline-block">
-                <img src={imagePreview} alt="Preview" className="h-20 w-20 object-cover rounded-lg border border-white/10" />
-                <button
-                  type="button"
-                  onClick={handleRemoveImage}
-                  className="absolute -top-2 -right-2 bg-black border border-white/10 rounded-full p-1 text-gray-400 hover:text-white cursor-pointer"
-                >
-                  <X size={12} />
-                </button>
+            {mediaFiles.length > 0 && (
+              <div className="flex flex-wrap gap-2 mt-2">
+                {mediaFiles.map((file, index) => (
+                  <div key={index} className="relative inline-block">
+                    {file.type.startsWith('video/') ? (
+                      <div className="h-20 w-20 bg-gray-100 rounded-lg border border-gray-200 flex items-center justify-center">
+                        <span className="text-xs text-gray-500">Video</span>
+                      </div>
+                    ) : (
+                      <img
+                        src={URL.createObjectURL(file)}
+                        alt="Preview"
+                        className="h-20 w-20 object-cover rounded-lg border border-gray-200"
+                      />
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveMedia(index)}
+                      className="absolute -top-2 -right-2 bg-white border border-gray-200 rounded-full p-1 text-gray-500 hover:text-red-500 cursor-pointer shadow-sm"
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
+                ))}
               </div>
             )}
 
             <div className="flex flex-wrap gap-2 items-center justify-between">
               <div className="flex space-x-2 overflow-x-auto pb-2 sm:pb-0 no-scrollbar items-center">
-                <input
-                  type="file"
-                  ref={fileInputRef}
-                  onChange={handleImageSelect}
-                  accept="image/*"
-                  className="hidden"
-                />
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  className="p-2 rounded-full bg-white/5 text-gray-400 hover:bg-white/10 hover:text-white transition-colors cursor-pointer"
-                  title="Add Image"
-                >
-                  <Camera size={18} />
-                </button>
+                <div className="flex items-center space-x-2">
+                  <button
+                    type="button"
+                    onClick={() => document.getElementById('media-upload')?.click()}
+                    className={`p-2 rounded-full transition-colors ${mediaFiles.length > 0 ? 'bg-green-100 text-green-600' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}
+                  >
+                    <Camera size={20} />
+                  </button>
+                  <input
+                    id="media-upload"
+                    type="file"
+                    accept="image/*,video/*,.heic,.HEIC"
+                    multiple
+                    className="hidden"
+                    onChange={handleFileSelect}
+                  />
+                  {mediaFiles.length > 0 && (
+                    <span className="text-xs text-green-600">{mediaFiles.length} file(s) selected</span>
+                  )}
+                </div>
 
-                <div className="w-px h-6 bg-white/10 mx-2"></div>
+                <div className="w-px h-6 bg-gray-200 mx-2"></div>
 
                 {categories.map(cat => (
                   <button
@@ -311,8 +451,8 @@ export default function Home() {
                     type="button"
                     onClick={() => setCategory(cat.id)}
                     className={`flex items-center space-x-1 px-3 py-1.5 rounded-full text-xs font-medium transition-all cursor-pointer ${category === cat.id
-                      ? `${cat.color} text-white shadow-lg`
-                      : 'bg-white/5 text-gray-400 hover:bg-white/10'
+                      ? `${cat.color} text-white shadow-md`
+                      : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
                       }`}
                   >
                     {cat.icon}
@@ -321,20 +461,48 @@ export default function Home() {
                 ))}
               </div>
 
-              <select
-                value={location}
-                onChange={(e) => setLocation(e.target.value)}
-                className="bg-white/5 border border-white/10 text-gray-300 text-xs rounded-lg px-2 py-1.5 focus:outline-none cursor-pointer"
-              >
-                {locations.map(loc => <option key={loc} value={loc} className="bg-neutral-900">{loc}</option>)}
-              </select>
+              <div className="flex items-center space-x-2">
+                <select
+                  value={location}
+                  onChange={(e) => {
+                    setLocation(e.target.value);
+                    setShowCustomLocation(e.target.value === 'Other...');
+                    if (e.target.value !== 'Other...') {
+                      setCustomLocation('');
+                    }
+                  }}
+                  className="bg-white border border-gray-200 text-gray-700 text-xs rounded-lg px-2 py-1.5 focus:outline-none cursor-pointer shadow-sm"
+                >
+                  {locations.map(loc => <option key={loc} value={loc} className="bg-white text-gray-900">{loc}</option>)}
+                </select>
+
+                {showCustomLocation && (
+                  <input
+                    type="text"
+                    value={customLocation}
+                    onChange={(e) => setCustomLocation(e.target.value)}
+                    placeholder="Enter location..."
+                    className="bg-white border border-gray-200 text-gray-700 text-xs rounded-lg px-2 py-1.5 focus:outline-none focus:border-green-500 focus:ring-1 focus:ring-green-500 transition-all shadow-sm"
+                  />
+                )}
+              </div>
+
+              {/* Date Selection */}
+              <div className="flex items-center space-x-2">
+                <input
+                  type="date"
+                  value={eventDate}
+                  onChange={(e) => setEventDate(e.target.value)}
+                  className="bg-white border border-gray-200 text-gray-700 text-xs rounded-lg px-2 py-1.5 focus:outline-none focus:border-green-500 focus:ring-1 focus:ring-green-500 transition-all shadow-sm"
+                />
+              </div>
             </div>
 
             <div className="flex justify-end">
               <button
                 type="submit"
-                disabled={!newMemory.trim()}
-                className="bg-white text-black px-5 py-2 rounded-lg text-sm font-bold hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer"
+                disabled={(!newMemory.trim() && mediaFiles.length === 0) || uploading}
+                className="bg-gray-900 text-white px-5 py-2 rounded-lg text-sm font-bold hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer shadow-md"
               >
                 Log Memory
               </button>
@@ -345,7 +513,12 @@ export default function Home() {
         {/* Feed Section */}
         <div className="flex-1 p-4 space-y-6 overflow-y-auto">
           <h2 className="text-sm font-mono text-gray-500 uppercase tracking-widest mb-4">Community Timeline</h2>
-          <MemoryFeed memories={memories} />
+          <MemoryFeed
+            memories={memories}
+            currentUserId={user?.id}
+            onDelete={handleDeleteMemory}
+            onUpdate={handleUpdateMemory}
+          />
         </div>
 
         {/* Footer Info */}
